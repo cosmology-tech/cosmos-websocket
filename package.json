@@ -1,0 +1,23 @@
+{
+  "name": "chain-event-manager",
+  "description": "",
+  "type": "module",
+  "version": "1.0.0",
+  "main": "output/ws.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zetazzz/ChainEventManager.git"
+  },
+  "keywords": [],
+  "author": "atmoner",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Zetazzz/ChainEventManager/issues"
+  },
+  "homepage": "https://github.com/Zetazzz/ChainEventManager#readme",
+  "dependencies": {
+    "isomorphic-ws": "^5.0.0",
+    "typescript": "^5.0.4",
+    "ws": "^8.6.0"
+  }
+}
