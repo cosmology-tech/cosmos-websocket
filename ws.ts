@@ -7,7 +7,10 @@ export interface EventOptions {
   onOpen?: (event: WebSocket.Event) => void;
   onError?: (event: WebSocket.ErrorEvent) => void;
   onClose?: (event: WebSocket.CloseEvent) => void;
-  onSubscribe?: (event: { id: string; params: EventParam }) => void;
+  onSubscribing?: (event: { id: string; params: EventParam }) => void;
+  onUnsubscribing?: (event: { params: EventParam }) => void;
+  onUnsubscribingAll?: () => void;
+
   onUnsubscribe?: (event: { params: EventParam }) => void;
   onUnsubscribeAll?: () => void;
 
@@ -15,7 +18,12 @@ export interface EventOptions {
   wsOpts?: WebSocket.ClientOptions;
 }
 
-//TODO:: sub with handler
+export interface EventHandler {
+  method: string;
+  params: EventParam;
+  handler?: MessageHandler;
+}
+
 export interface EventParam {
   [key: string]: string;
 }
@@ -26,12 +34,19 @@ const METHODS = {
   UN_SUB_ALL: "unsubscribe_all",
 };
 
+//TODO:: handle error case
+type MessageHandler = (data: any) => void;
+
 export class ChainEventManager {
-  private idCount: number = 0;
   readonly url: string | URL;
   private opts: EventOptions;
   private ws: WebSocket;
-  private queuedEvents: { method: string; params: EventParam[] }[] = [];
+  private queuedEvents: {
+    handlers: EventHandler[];
+  }[] = [];
+  private eventHandlerMapping: {
+    [key: string]: EventHandler;
+  } = {};
 
   constructor(wsServer: string | URL, opts?: EventOptions) {
     this.url = wsServer;
@@ -42,49 +57,51 @@ export class ChainEventManager {
     }
   }
 
-  subscribe(params: EventParam | EventParam[]) {
-    this._send(METHODS.SUB, Array.isArray(params) ? params : [params]);
+  subscribe(params: EventParam | EventParam[], handler: MessageHandler) {
+    this._send(buildEventHandlers(METHODS.SUB, params, handler));
   }
 
   unsubscribe(params: EventParam | EventParam[]) {
-    this._send(METHODS.UN_SUB, Array.isArray(params) ? params : [params]);
+    this._send(buildEventHandlers(METHODS.UN_SUB, params));
   }
 
   unsubscribeAll() {
-    this._send(METHODS.UN_SUB_ALL, [
+    this._send([
       {
-        query: "",
+        method: METHODS.UN_SUB_ALL,
+        params: {
+          query: "",
+        },
       },
     ]);
   }
 
-  private _queueEvents(method: string, params: EventParam[]) {
+  private queueEvents(handlers: EventHandler[]) {
     this.queuedEvents.push({
-      method,
-      params,
+      handlers,
     });
   }
 
-  private _dequeueEvents() {
+  private dequeueEvents() {
     const current = this.queuedEvents.shift();
 
     if (current) {
-      this.wsSend(current.method, current.params);
-      this._dequeueEvents();
+      this.sendMsgs(current.handlers);
+      this.dequeueEvents();
     }
   }
 
-  private _send(method: string, params: EventParam[]) {
+  private _send(handlers: EventHandler[]) {
     let isConnecting = false;
 
     switch (this.ws.readyState) {
       case WebSocket.CONNECTING:
         isConnecting = true;
-        this._queueEvents(method, params);
+        this.queueEvents(handlers);
 
         break;
       case WebSocket.OPEN:
-        this.wsSend(method, params);
+        this.sendMsgs(handlers);
         break;
 
       case WebSocket.CLOSING:
@@ -97,41 +114,50 @@ export class ChainEventManager {
       this.queuedEvents.length &&
       this.ws.readyState === WebSocket.OPEN
     ) {
-      this._dequeueEvents();
+      this.dequeueEvents();
     }
   }
 
-  private wsSend(method: string, params: EventParam[]) {
-    for (const p of params) {
+  private wsSend(method: string, id: string, params: EventParam) {
+    this.ws.send(
+      JSON.stringify({
+        method,
+        params,
+        id,
+        jsonrpc: "2.0",
+      })
+    );
+  }
+
+  private sendMsgs(handlers: EventHandler[]) {
+    for (const handler of handlers) {
       const id = uuidv4().toString();
-      this.ws.send(
-        JSON.stringify({
-          method: method,
-          params: p,
-          id: id,
-          jsonrpc: "2.0",
-        })
-      );
+      const p = handler.params;
+      const method = handler.method;
+
+      this.eventHandlerMapping[id] = handler;
 
       switch (method) {
         case METHODS.SUB:
-          if (this.opts?.onSubscribe) {
-            this.opts.onSubscribe({ id, params: p });
+          if (this.opts?.onSubscribing) {
+            this.opts.onSubscribing({ id, params: p });
           }
           break;
 
         case METHODS.UN_SUB:
-          if (this.opts?.onUnsubscribe) {
-            this.opts.onUnsubscribe({ params: p });
+          if (this.opts?.onUnsubscribing) {
+            this.opts.onUnsubscribing({ params: p });
           }
           break;
 
         case METHODS.UN_SUB_ALL:
-          if (this.opts?.onUnsubscribeAll) {
-            this.opts.onUnsubscribeAll();
+          if (this.opts?.onUnsubscribingAll) {
+            this.opts.onUnsubscribingAll();
           }
           break;
       }
+
+      this.wsSend(method, id, p);
     }
   }
 
@@ -145,7 +171,7 @@ export class ChainEventManager {
   }
 
   private _onOpen(event: WebSocket.Event) {
-    this._dequeueEvents();
+    this.dequeueEvents();
     if (this.opts?.onOpen) {
       this.opts.onOpen(event);
     }
@@ -164,6 +190,42 @@ export class ChainEventManager {
   }
 
   private _onMessage(event: WebSocket.MessageEvent) {
-    console.log(event.data);
+    const data = JSON.parse(event.data);
+
+    const eventHandler = this.eventHandlerMapping[data.id];
+
+    switch (eventHandler.method) {
+      case METHODS.SUB:
+        if (eventHandler.handler) {
+          eventHandler.handler(data);
+        } else {
+          console.log(data);
+          console.log(eventHandler);
+        }
+        break;
+
+      case METHODS.UN_SUB:
+        if (this.opts?.onUnsubscribe) {
+          this.opts.onUnsubscribe({ params: eventHandler.params });
+        }
+
+        break;
+
+      case METHODS.UN_SUB_ALL:
+        if (this.opts?.onUnsubscribeAll) {
+          this.opts.onUnsubscribeAll();
+        }
+        break;
+    }
   }
+}
+
+function buildEventHandlers(
+  method: string,
+  params: EventParam | EventParam[],
+  handler?: MessageHandler
+): EventHandler[] {
+  return Array.isArray(params)
+    ? params.map((param) => ({ method, params: param, handler }))
+    : [{ method, params, handler }];
 }

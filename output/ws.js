@@ -7,49 +7,51 @@ const METHODS = {
 };
 export class ChainEventManager {
     constructor(wsServer, opts) {
-        this.idCount = 0;
         this.queuedEvents = [];
+        this.eventHandlerMapping = {};
         this.url = wsServer;
         this.opts = opts;
         if (this.opts?.autoConnect) {
             this.connect();
         }
     }
-    subscribe(params) {
-        this._send(METHODS.SUB, Array.isArray(params) ? params : [params]);
+    subscribe(params, handler) {
+        this._send(buildEventHandlers(METHODS.SUB, params, handler));
     }
     unsubscribe(params) {
-        this._send(METHODS.UN_SUB, Array.isArray(params) ? params : [params]);
+        this._send(buildEventHandlers(METHODS.UN_SUB, params));
     }
     unsubscribeAll() {
-        this._send(METHODS.UN_SUB_ALL, [
+        this._send([
             {
-                query: "",
+                method: METHODS.UN_SUB_ALL,
+                params: {
+                    query: "",
+                },
             },
         ]);
     }
-    _queueEvents(method, params) {
+    queueEvents(handlers) {
         this.queuedEvents.push({
-            method,
-            params,
+            handlers,
         });
     }
-    _dequeueEvents() {
+    dequeueEvents() {
         const current = this.queuedEvents.shift();
         if (current) {
-            this.wsSend(current.method, current.params);
-            this._dequeueEvents();
+            this.sendMsgs(current.handlers);
+            this.dequeueEvents();
         }
     }
-    _send(method, params) {
+    _send(handlers) {
         let isConnecting = false;
         switch (this.ws.readyState) {
             case WebSocket.CONNECTING:
                 isConnecting = true;
-                this._queueEvents(method, params);
+                this.queueEvents(handlers);
                 break;
             case WebSocket.OPEN:
-                this.wsSend(method, params);
+                this.sendMsgs(handlers);
                 break;
             case WebSocket.CLOSING:
             case WebSocket.CLOSED:
@@ -58,35 +60,41 @@ export class ChainEventManager {
         if (isConnecting &&
             this.queuedEvents.length &&
             this.ws.readyState === WebSocket.OPEN) {
-            this._dequeueEvents();
+            this.dequeueEvents();
         }
     }
-    wsSend(method, params) {
-        for (const p of params) {
+    wsSend(method, id, params) {
+        this.ws.send(JSON.stringify({
+            method,
+            params,
+            id,
+            jsonrpc: "2.0",
+        }));
+    }
+    sendMsgs(handlers) {
+        for (const handler of handlers) {
             const id = uuidv4().toString();
-            this.ws.send(JSON.stringify({
-                method: method,
-                params: p,
-                id: id,
-                jsonrpc: "2.0",
-            }));
+            const p = handler.params;
+            const method = handler.method;
+            this.eventHandlerMapping[id] = handler;
             switch (method) {
                 case METHODS.SUB:
-                    if (this.opts?.onSubscribe) {
-                        this.opts.onSubscribe({ id, params: p });
+                    if (this.opts?.onSubscribing) {
+                        this.opts.onSubscribing({ id, params: p });
                     }
                     break;
                 case METHODS.UN_SUB:
-                    if (this.opts?.onUnsubscribe) {
-                        this.opts.onUnsubscribe({ params: p });
+                    if (this.opts?.onUnsubscribing) {
+                        this.opts.onUnsubscribing({ params: p });
                     }
                     break;
                 case METHODS.UN_SUB_ALL:
-                    if (this.opts?.onUnsubscribeAll) {
-                        this.opts.onUnsubscribeAll();
+                    if (this.opts?.onUnsubscribingAll) {
+                        this.opts.onUnsubscribingAll();
                     }
                     break;
             }
+            this.wsSend(method, id, p);
         }
     }
     connect() {
@@ -97,7 +105,7 @@ export class ChainEventManager {
         this.ws.onclose = this._onClose.bind(this);
     }
     _onOpen(event) {
-        this._dequeueEvents();
+        this.dequeueEvents();
         if (this.opts?.onOpen) {
             this.opts.onOpen(event);
         }
@@ -113,6 +121,33 @@ export class ChainEventManager {
         }
     }
     _onMessage(event) {
-        console.log(event.data);
+        const data = JSON.parse(event.data);
+        const eventHandler = this.eventHandlerMapping[data.id];
+        switch (eventHandler.method) {
+            case METHODS.SUB:
+                if (eventHandler.handler) {
+                    eventHandler.handler(data);
+                }
+                else {
+                    console.log(data);
+                    console.log(eventHandler);
+                }
+                break;
+            case METHODS.UN_SUB:
+                if (this.opts?.onUnsubscribe) {
+                    this.opts.onUnsubscribe({ params: eventHandler.params });
+                }
+                break;
+            case METHODS.UN_SUB_ALL:
+                if (this.opts?.onUnsubscribeAll) {
+                    this.opts.onUnsubscribeAll();
+                }
+                break;
+        }
     }
+}
+function buildEventHandlers(method, params, handler) {
+    return Array.isArray(params)
+        ? params.map((param) => ({ method, params: param, handler }))
+        : [{ method, params, handler }];
 }
