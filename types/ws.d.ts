@@ -9,10 +9,12 @@ export interface EventOptions {
         params: EventParam;
     }) => void;
     onUnsubscribing?: (event: {
+        id: string;
         params: EventParam;
     }) => void;
     onUnsubscribingAll?: () => void;
     onUnsubscribe?: (event: {
+        id: string;
         params: EventParam;
     }) => void;
     onUnsubscribeAll?: () => void;

@@ -8,10 +8,10 @@ export interface EventOptions {
   onError?: (event: WebSocket.ErrorEvent) => void;
   onClose?: (event: WebSocket.CloseEvent) => void;
   onSubscribing?: (event: { id: string; params: EventParam }) => void;
-  onUnsubscribing?: (event: { params: EventParam }) => void;
+  onUnsubscribing?: (event: { id: string; params: EventParam }) => void;
   onUnsubscribingAll?: () => void;
 
-  onUnsubscribe?: (event: { params: EventParam }) => void;
+  onUnsubscribe?: (event: { id: string; params: EventParam }) => void;
   onUnsubscribeAll?: () => void;
 
   protocols?: string | string[];
@@ -34,7 +34,6 @@ const METHODS = {
   UN_SUB_ALL: "unsubscribe_all",
 };
 
-//TODO:: handle error case
 type MessageHandler = (data: any) => void;
 
 export class ChainEventManager {
@@ -146,7 +145,7 @@ export class ChainEventManager {
 
         case METHODS.UN_SUB:
           if (this.opts?.onUnsubscribing) {
-            this.opts.onUnsubscribing({ params: p });
+            this.opts.onUnsubscribing({ id, params: p });
           }
           break;
 
@@ -206,7 +205,7 @@ export class ChainEventManager {
 
       case METHODS.UN_SUB:
         if (this.opts?.onUnsubscribe) {
-          this.opts.onUnsubscribe({ params: eventHandler.params });
+          this.opts.onUnsubscribe({ id: data.id, params: eventHandler.params });
         }
 
         break;
@@ -229,3 +228,6 @@ function buildEventHandlers(
     ? params.map((param) => ({ method, params: param, handler }))
     : [{ method, params, handler }];
 }
+
+//TODO:: handle error case
+//TODO:: handle onsubscribe

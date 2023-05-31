@@ -85,7 +85,7 @@ export class ChainEventManager {
                     break;
                 case METHODS.UN_SUB:
                     if (this.opts?.onUnsubscribing) {
-                        this.opts.onUnsubscribing({ params: p });
+                        this.opts.onUnsubscribing({ id, params: p });
                     }
                     break;
                 case METHODS.UN_SUB_ALL:
@@ -135,7 +135,7 @@ export class ChainEventManager {
                 break;
             case METHODS.UN_SUB:
                 if (this.opts?.onUnsubscribe) {
-                    this.opts.onUnsubscribe({ params: eventHandler.params });
+                    this.opts.onUnsubscribe({ id: data.id, params: eventHandler.params });
                 }
                 break;
             case METHODS.UN_SUB_ALL:
