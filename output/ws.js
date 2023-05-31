@@ -1,4 +1,5 @@
 import WebSocket from "isomorphic-ws";
+import { v4 as uuidv4 } from "uuid";
 const METHODS = {
     SUB: "subscribe",
     UN_SUB: "unsubscribe",
@@ -62,13 +63,30 @@ export class ChainEventManager {
     }
     wsSend(method, params) {
         for (const p of params) {
-            const currentId = this.idCount++;
+            const id = uuidv4().toString();
             this.ws.send(JSON.stringify({
                 method: method,
                 params: p,
-                id: currentId.toString(),
+                id: id,
                 jsonrpc: "2.0",
             }));
+            switch (method) {
+                case METHODS.SUB:
+                    if (this.opts?.onSubscribe) {
+                        this.opts.onSubscribe({ id, params: p });
+                    }
+                    break;
+                case METHODS.UN_SUB:
+                    if (this.opts?.onUnsubscribe) {
+                        this.opts.onUnsubscribe({ params: p });
+                    }
+                    break;
+                case METHODS.UN_SUB_ALL:
+                    if (this.opts?.onUnsubscribeAll) {
+                        this.opts.onUnsubscribeAll();
+                    }
+                    break;
+            }
         }
     }
     connect() {

@@ -8,6 +8,10 @@ export interface EventOptions {
         id: string;
         params: EventParam;
     }) => void;
+    onUnsubscribe?: (event: {
+        params: EventParam;
+    }) => void;
+    onUnsubscribeAll?: () => void;
     protocols?: string | string[];
     wsOpts?: WebSocket.ClientOptions;
 }
