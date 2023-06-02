@@ -13,6 +13,16 @@ export interface EventOptions {
         params: EventParam;
     }) => void;
     onUnsubscribingAll?: () => void;
+    onSubscribe?: (event: {
+        id: string;
+        params: EventParam;
+    }) => void;
+    onEventError?: (event: {
+        id: string;
+        method: string;
+        params: EventParam;
+        error: any;
+    }) => void;
     onUnsubscribe?: (event: {
         id: string;
         params: EventParam;
@@ -27,15 +37,18 @@ export interface EventHandler {
     handler?: MessageHandler;
 }
 export interface EventParam {
+    query: string;
     [key: string]: string;
 }
 type MessageHandler = (data: any) => void;
 export declare class ChainEventManager {
     readonly url: string | URL;
+    private isUnsubscribingAll;
     private opts;
     private ws;
     private queuedEvents;
     private eventHandlerMapping;
+    private queryIdMapping;
     constructor(wsServer: string | URL, opts?: EventOptions);
     subscribe(params: EventParam | EventParam[], handler: MessageHandler): void;
     unsubscribe(params: EventParam | EventParam[]): void;
@@ -50,5 +63,7 @@ export declare class ChainEventManager {
     private _onError;
     private _onClose;
     private _onMessage;
+    private mapQueryAndId;
+    private removeIdFromQueryIdMapping;
 }
 export {};

@@ -7,10 +7,18 @@ export interface EventOptions {
   onOpen?: (event: WebSocket.Event) => void;
   onError?: (event: WebSocket.ErrorEvent) => void;
   onClose?: (event: WebSocket.CloseEvent) => void;
+
   onSubscribing?: (event: { id: string; params: EventParam }) => void;
   onUnsubscribing?: (event: { id: string; params: EventParam }) => void;
   onUnsubscribingAll?: () => void;
 
+  onSubscribe?: (event: { id: string; params: EventParam }) => void;
+  onEventError?: (event: {
+    id: string;
+    method: string;
+    params: EventParam;
+    error: any;
+  }) => void;
   onUnsubscribe?: (event: { id: string; params: EventParam }) => void;
   onUnsubscribeAll?: () => void;
 
@@ -25,6 +33,7 @@ export interface EventHandler {
 }
 
 export interface EventParam {
+  query: string;
   [key: string]: string;
 }
 
@@ -38,6 +47,7 @@ type MessageHandler = (data: any) => void;
 
 export class ChainEventManager {
   readonly url: string | URL;
+  private isUnsubscribingAll = false;
   private opts: EventOptions;
   private ws: WebSocket;
   private queuedEvents: {
@@ -45,6 +55,9 @@ export class ChainEventManager {
   }[] = [];
   private eventHandlerMapping: {
     [key: string]: EventHandler;
+  } = {};
+  private queryIdMapping: {
+    [key: string]: string[];
   } = {};
 
   constructor(wsServer: string | URL, opts?: EventOptions) {
@@ -57,14 +70,27 @@ export class ChainEventManager {
   }
 
   subscribe(params: EventParam | EventParam[], handler: MessageHandler) {
+    if (this.isUnsubscribingAll) {
+      throw new Error("unsubscribing all, can't subscribe now.");
+    }
+
     this._send(buildEventHandlers(METHODS.SUB, params, handler));
   }
 
   unsubscribe(params: EventParam | EventParam[]) {
+    if (this.isUnsubscribingAll) {
+      throw new Error("unsubscribing all, can't unsubscribe now.");
+    }
+
     this._send(buildEventHandlers(METHODS.UN_SUB, params));
   }
 
   unsubscribeAll() {
+    if (this.isUnsubscribingAll) {
+      throw new Error("unsubscribing all already, don't repeat.");
+    }
+
+    this.isUnsubscribingAll = true;
     this._send([
       {
         method: METHODS.UN_SUB_ALL,
@@ -141,6 +167,9 @@ export class ChainEventManager {
           if (this.opts?.onSubscribing) {
             this.opts.onSubscribing({ id, params: p });
           }
+
+          this.mapQueryAndId(p.query, id);
+
           break;
 
         case METHODS.UN_SUB:
@@ -193,29 +222,88 @@ export class ChainEventManager {
 
     const eventHandler = this.eventHandlerMapping[data.id];
 
-    switch (eventHandler.method) {
-      case METHODS.SUB:
-        if (eventHandler.handler) {
-          eventHandler.handler(data);
-        } else {
-          console.log(data);
-          console.log(eventHandler);
-        }
-        break;
+    if (data.error) {
+      this.eventHandlerMapping[data.id] = undefined;
+      this.removeIdFromQueryIdMapping(eventHandler.params.query, data.id);
 
-      case METHODS.UN_SUB:
-        if (this.opts?.onUnsubscribe) {
-          this.opts.onUnsubscribe({ id: data.id, params: eventHandler.params });
-        }
+      if (this.opts?.onEventError) {
+        this.opts.onEventError({
+          id: data.id,
+          method: eventHandler.method,
+          params: eventHandler.params,
+          error: data.error,
+        });
+      }
+    } else {
+      switch (eventHandler.method) {
+        case METHODS.SUB:
+          if (JSON.stringify(data.result) === "{}") {
+            if (this.opts?.onSubscribe) {
+              this.opts.onSubscribe({
+                id: data.id,
+                params: eventHandler.params,
+              });
+            }
+          } else {
+            if (eventHandler.handler) {
+              eventHandler.handler(data.result);
+            }
+          }
 
-        break;
+          break;
 
-      case METHODS.UN_SUB_ALL:
-        if (this.opts?.onUnsubscribeAll) {
-          this.opts.onUnsubscribeAll();
-        }
-        break;
+        case METHODS.UN_SUB:
+          this.eventHandlerMapping[data.id] = undefined;
+
+          const originSubIds = this.queryIdMapping[eventHandler.params.query];
+
+          for (const subId of originSubIds) {
+            this.eventHandlerMapping[subId] = undefined;
+          }
+
+          this.queryIdMapping[eventHandler.params.query] = undefined;
+
+          if (this.opts?.onUnsubscribe) {
+            this.opts.onUnsubscribe({
+              id: data.id,
+              params: eventHandler.params,
+            });
+          }
+
+          break;
+
+        case METHODS.UN_SUB_ALL:
+          this.eventHandlerMapping = {};
+          this.queryIdMapping = {};
+
+          if (this.opts?.onUnsubscribeAll) {
+            this.opts.onUnsubscribeAll();
+          }
+          break;
+      }
     }
+
+    if (eventHandler.method == METHODS.UN_SUB_ALL) {
+      this.isUnsubscribingAll = false;
+    }
+  }
+
+  private mapQueryAndId(query: string, id: string) {
+    if (!this.queryIdMapping[query]) {
+      this.queryIdMapping[query] = [];
+    }
+
+    this.queryIdMapping[query].push(id);
+  }
+
+  private removeIdFromQueryIdMapping(query: string, id: string) {
+    if (!this.queryIdMapping[query]) {
+      return;
+    }
+
+    this.queryIdMapping[query] = this.queryIdMapping[query].filter(
+      (item) => item !== id
+    );
   }
 }
 
@@ -225,9 +313,10 @@ function buildEventHandlers(
   handler?: MessageHandler
 ): EventHandler[] {
   return Array.isArray(params)
-    ? params.map((param) => ({ method, params: param, handler }))
+    ? params.map(({ query, ...param }) => ({
+        method,
+        params: { query: query.trim(), ...param },
+        handler,
+      }))
     : [{ method, params, handler }];
 }
-
-//TODO:: handle error case
-//TODO:: handle onsubscribe

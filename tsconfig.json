@@ -4,6 +4,7 @@
         "moduleResolution": "node",
         "allowJs": true,
         "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
         "declaration": true,
         "declarationDir": "./types",
         "lib": ["dom","ES2020"],

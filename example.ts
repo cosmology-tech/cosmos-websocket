@@ -1,4 +1,4 @@
-import { ChainEventManager, EventParam } from "./ws";
+import { ChainEventManager } from "./ws.js";
 
 const manager = new ChainEventManager(
   "ws://seed1.bitcanna.io:26657/websocket",
@@ -6,8 +6,20 @@ const manager = new ChainEventManager(
     onOpen: () => {
       console.log("bitcanna.io connected!");
     },
+
+    onEventError: (event) => {
+      console.log(
+        `There's something wrong with ${event.method} ${event.id}:${event.params["query"]}`
+      );
+
+      console.log(event.error.data);
+    },
+
     onSubscribing: (event) => {
       console.log(`Subscribing ${event.id}:${event.params["query"]}`);
+    },
+    onSubscribe: (event) => {
+      console.log(`Subscribing ${event.id}:${event.params["query"]} done`);
     },
     onUnsubscribing: (event) => {
       console.log(`Unsubscribing ${event.params["query"]}`);
@@ -26,6 +38,14 @@ const manager = new ChainEventManager(
 
 manager.connect();
 
+manager.subscribe(
+  {
+    query: "tm.event='NewBlock'",
+  },
+  commonMessageHandler
+);
+
+// repeat sub to get an error.
 manager.subscribe(
   {
     query: "tm.event='NewBlock'",

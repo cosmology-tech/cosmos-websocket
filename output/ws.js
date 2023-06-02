@@ -7,8 +7,10 @@ const METHODS = {
 };
 export class ChainEventManager {
     constructor(wsServer, opts) {
+        this.isUnsubscribingAll = false;
         this.queuedEvents = [];
         this.eventHandlerMapping = {};
+        this.queryIdMapping = {};
         this.url = wsServer;
         this.opts = opts;
         if (this.opts?.autoConnect) {
@@ -16,12 +18,22 @@ export class ChainEventManager {
         }
     }
     subscribe(params, handler) {
+        if (this.isUnsubscribingAll) {
+            throw new Error("unsubscribing all, can't subscribe now.");
+        }
         this._send(buildEventHandlers(METHODS.SUB, params, handler));
     }
     unsubscribe(params) {
+        if (this.isUnsubscribingAll) {
+            throw new Error("unsubscribing all, can't unsubscribe now.");
+        }
         this._send(buildEventHandlers(METHODS.UN_SUB, params));
     }
     unsubscribeAll() {
+        if (this.isUnsubscribingAll) {
+            throw new Error("unsubscribing all already, don't repeat.");
+        }
+        this.isUnsubscribingAll = true;
         this._send([
             {
                 method: METHODS.UN_SUB_ALL,
@@ -82,6 +94,7 @@ export class ChainEventManager {
                     if (this.opts?.onSubscribing) {
                         this.opts.onSubscribing({ id, params: p });
                     }
+                    this.mapQueryAndId(p.query, id);
                     break;
                 case METHODS.UN_SUB:
                     if (this.opts?.onUnsubscribing) {
@@ -123,31 +136,81 @@ export class ChainEventManager {
     _onMessage(event) {
         const data = JSON.parse(event.data);
         const eventHandler = this.eventHandlerMapping[data.id];
-        switch (eventHandler.method) {
-            case METHODS.SUB:
-                if (eventHandler.handler) {
-                    eventHandler.handler(data);
-                }
-                else {
-                    console.log(data);
-                    console.log(eventHandler);
-                }
-                break;
-            case METHODS.UN_SUB:
-                if (this.opts?.onUnsubscribe) {
-                    this.opts.onUnsubscribe({ id: data.id, params: eventHandler.params });
-                }
-                break;
-            case METHODS.UN_SUB_ALL:
-                if (this.opts?.onUnsubscribeAll) {
-                    this.opts.onUnsubscribeAll();
-                }
-                break;
+        if (data.error) {
+            this.eventHandlerMapping[data.id] = undefined;
+            this.removeIdFromQueryIdMapping(eventHandler.params.query, data.id);
+            if (this.opts?.onEventError) {
+                this.opts.onEventError({
+                    id: data.id,
+                    method: eventHandler.method,
+                    params: eventHandler.params,
+                    error: data.error,
+                });
+            }
         }
+        else {
+            switch (eventHandler.method) {
+                case METHODS.SUB:
+                    if (JSON.stringify(data.result) === "{}") {
+                        if (this.opts?.onSubscribe) {
+                            this.opts.onSubscribe({
+                                id: data.id,
+                                params: eventHandler.params,
+                            });
+                        }
+                    }
+                    else {
+                        if (eventHandler.handler) {
+                            eventHandler.handler(data.result);
+                        }
+                    }
+                    break;
+                case METHODS.UN_SUB:
+                    this.eventHandlerMapping[data.id] = undefined;
+                    const originSubIds = this.queryIdMapping[eventHandler.params.query];
+                    for (const subId of originSubIds) {
+                        this.eventHandlerMapping[subId] = undefined;
+                    }
+                    this.queryIdMapping[eventHandler.params.query] = undefined;
+                    if (this.opts?.onUnsubscribe) {
+                        this.opts.onUnsubscribe({
+                            id: data.id,
+                            params: eventHandler.params,
+                        });
+                    }
+                    break;
+                case METHODS.UN_SUB_ALL:
+                    this.eventHandlerMapping = {};
+                    this.queryIdMapping = {};
+                    if (this.opts?.onUnsubscribeAll) {
+                        this.opts.onUnsubscribeAll();
+                    }
+                    break;
+            }
+        }
+        if (eventHandler.method == METHODS.UN_SUB_ALL) {
+            this.isUnsubscribingAll = false;
+        }
+    }
+    mapQueryAndId(query, id) {
+        if (!this.queryIdMapping[query]) {
+            this.queryIdMapping[query] = [];
+        }
+        this.queryIdMapping[query].push(id);
+    }
+    removeIdFromQueryIdMapping(query, id) {
+        if (!this.queryIdMapping[query]) {
+            return;
+        }
+        this.queryIdMapping[query] = this.queryIdMapping[query].filter((item) => item !== id);
     }
 }
 function buildEventHandlers(method, params, handler) {
     return Array.isArray(params)
-        ? params.map((param) => ({ method, params: param, handler }))
+        ? params.map(({ query, ...param }) => ({
+            method,
+            params: { query: query.trim(), ...param },
+            handler,
+        }))
         : [{ method, params, handler }];
 }
